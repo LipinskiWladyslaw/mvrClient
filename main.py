@@ -1,16 +1,19 @@
 from PyQt5.QtCore import QIODevice, QTimer, QSettings
 from pyqtgraph.examples.MultiDataPlot import widget
 from PyQt5.QtSerialPort import QSerialPort, QSerialPortInfo
-
+import rabbitpy
 from design import Ui_Form
 
 from PyQt5 import QtWidgets as qtw
 from PyQt5 import QtCore as qtc
+from PyQt5 import QtGui as qtg
 
 class MainForm(qtw.QWidget, Ui_Form):
 
     global serial, portlist
     global rxstring, rssi, dataConfig
+
+    startedConsumer = qtc.pyqtSignal(str)
 
     def __init__(self, *args, **kwargs):
         global serial, portlist, rxstring
@@ -24,6 +27,7 @@ class MainForm(qtw.QWidget, Ui_Form):
 
         self.UpdateListComPort.clicked.connect(self.UpdateComport)
         self.openButton.clicked.connect(self.open_port)
+        self.rabbitButton.clicked.connect(self.startConcumer)
 
         serial = QSerialPort()
         serial.readyRead.connect(self.on_ready_read)
@@ -86,7 +90,7 @@ class MainForm(qtw.QWidget, Ui_Form):
             indexFirst = -1
             rxs = ''
             rxstring = ''
-            print('rx is uncorrect ')
+            #print('rx is uncorrect ')
         rxstring += rxs
         indexFirst = rxstring.find('#')
 
@@ -99,24 +103,8 @@ class MainForm(qtw.QWidget, Ui_Form):
                 rssi = rxstring
                 rxstring = ''
 
-        print("rssi " + rssi)
+        #print("rssi " + rssi)
         self.lcdRSSI.display(rssi)
-
-        '''
-        if rssi != '':
-            body = rssi.encode(encoding="utf-8")
-            try:
-                rabbit_channel.basic_publish(exchange='RSSI' + dataConfig['rabbit_queue'], routing_key='', body=body)
-            except:
-                print('connection to RabbitMQ is Not ready yet')
-    
-            print("rssi for rabbit " + rssi)
-    
-            #transmitData = '#SET 980'
-            #b = transmitData.encode('utf-8')
-            #serial.write(b)
-    
-        '''
 
     def write_data(self, data):
         if serial.isOpen():
@@ -127,6 +115,44 @@ class MainForm(qtw.QWidget, Ui_Form):
         data = '#SET 980'
         self.write_data(data)
 
+    def startConcumer(self):
+        self.concumer = Consumer()
+        self.concumer_thread = qtc.QThread()
+
+        # Assign the worker to the thread and start the thread
+        self.concumer.moveToThread(self.concumer_thread)
+        self.concumer_thread.start()
+
+        self.concumer.received.connect(self.updateFrequency)
+        self.startedConsumer.connect(self.concumer.startConsumer)
+
+        self.startedConsumer.emit('464')
+
+    @qtc.pyqtSlot(str)
+    def updateFrequency(self, frequency):
+        self.lcdFrequency.display(frequency)
+
+class Consumer(qtc.QObject):
+
+    received = qtc.pyqtSignal(str)
+
+    @qtc.pyqtSlot(str)
+    def startConsumer(self):
+    #def __init__(self):
+    #    super().__init__()
+        with rabbitpy.Connection('amqp://valkiria_user:314159265@mizar.kyiv.ua:5672/valkiria') as conn:
+            with conn.channel() as channel:
+                queue = rabbitpy.Queue(channel, 'frequency464')
+
+                # Exit on CTRL-C
+                try:
+                    # Consume the message
+                    for message in queue:
+                        frequency = message.body.decode("utf-8")
+                        message.ack()
+                        self.received.emit(frequency)
+                except KeyboardInterrupt:
+                    print('Exited consumer')
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
